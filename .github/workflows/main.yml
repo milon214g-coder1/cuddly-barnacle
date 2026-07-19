@@ -1,8 +1,9 @@
-name: Build APK from ZIP
+name: Build RajMistri BD APK
+
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
   build:
@@ -11,15 +12,34 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Find and unzip project
+      - name: Find RajMistri zip
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          echo "Found zip: $ZIP_FILE"
+          ZIP_FILE=$(find . -maxdepth 1 -iname "*rajmistri*.zip" | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No file matching *rajmistri*.zip found at repo root. Files present:"
+            find . -maxdepth 1 -iname "*.zip"
+            exit 1
+          fi
+          echo "Using zip: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Unzip project
+        run: |
+          rm -rf project
           mkdir -p project
           unzip -o "$ZIP_FILE" -d project
 
-      - name: List extracted files
-        run: find project -maxdepth 3
+      - name: Locate Gradle project root
+        run: |
+          SETTINGS_PATH=$(find project -maxdepth 3 -name "settings.gradle.kts" | head -n 1)
+          if [ -z "$SETTINGS_PATH" ]; then
+            echo "Could not find settings.gradle.kts inside the zip. Extracted structure:"
+            find project -maxdepth 4
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_PATH")
+          echo "Gradle project root: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -30,19 +50,29 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.6'
+          gradle-version: '8.9'
+
+      - name: Create .env (placeholder, not used at build time)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: echo "GEMINI_API_KEY=dummy" > .env
 
       - name: Generate debug keystore
-        working-directory: project
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          keytool -genkey -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Build Debug APK
-        working-directory: project
-        run: gradle assembleDebug
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GitaJyoti-app-debug
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          name: RajMistriBD-app-debug
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
